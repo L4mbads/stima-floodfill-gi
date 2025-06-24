@@ -205,7 +205,7 @@ id = (id >= 55 && id <= 63) ? 100 : id;//LOL IM LAZY
 
 }
 
-const float falloff = .41;
+const float falloff = 2.43902;
 
 const vec3 sun = (vec3(3000.) * (vec3(1.0, 0.89, 0.85)*sRGBtoAP1 ));
 const vec3 sky = vec3(47.*100.) * getValFromSkyLUT(normalize(vec3(0.0, 1.0, 0.0)),  sunVector);
@@ -213,7 +213,7 @@ const vec3 sunTransmittance = getValFromTLUT(colortex13, resolution, vec3(0.0, g
 
 
 void main() {
-    
+
     ivec2 uv = ivec2(gl_FragCoord.xy);
 
     //if(uv.x >=  (shadowMapResolution/2)){floodFillData=texelFetch(shadowcolor0, uv, 0); return;}
@@ -243,42 +243,45 @@ void main() {
     bool upVis = !(RaytraceVoxelShadows(voxelPos, ivec3(floor(voxelPos+vec3(0.0, 0.05, 0.0))),  mat3(gbufferModelViewInverse)*upPosition, true, 20));
 
     #ifdef ShadowMapSunFloodFill
-        vec3 visibility = calculateShadow(shadowtex1, feetToShadowScreen(VoxelSpaceToSceneSpace(voxelPos+vec3(0.0, 0.05, 0.0))), 0.0004);
+        vec3 sunVisibility = calculateShadow(shadowtex1, feetToShadowScreen(VoxelSpaceToSceneSpace(voxelPos+vec3(0.0, 0.05, 0.0))), 0.0004);
     #else
-        vec3 visibility = vec3(RaytraceVoxelShadows2(prevVoxelPos, ivec3(floor(prevVoxelPos+vec3(0.05))),  sunVector, false, 40));
+        vec3 sunVisibility = vec3(RaytraceVoxelShadows2(prevVoxelPos, ivec3(floor(prevVoxelPos+vec3(0.05))),  sunVector, false, 40));
     #endif
 
 
-    
+
     ivec2 puv = GetPreviousVoxelStoragePos(prevVoxelPos, previousCameraPosition.y);
 
     vec3 samples = vec3(0.0);
 
-    //balint method  
+    //balint floodfill method
     for(int i = 0; i < 6; ++i) {
 
         if(hitNoncubic(id, offset[i])) continue;
 
-        ivec2 spuv = GetPreviousVoxelStoragePos(prevVoxelPos+offset[i], previousCameraPosition.y);
-        ivec2 suv = GetVoxelStoragePos(voxelPos+offset[i]);
+        ivec2 previousSampleVoxelUV = GetPreviousVoxelStoragePos(prevVoxelPos+offset[i], previousCameraPosition.y);
+        ivec2 sampleVoxelUV = GetVoxelStoragePos(voxelPos+offset[i]);
 
-        vec4 s = unpackUnorm4x8(texelFetch(shadowcolor1, suv, 0).x);
+        vec4 sampleVoxel = unpackUnorm4x8(texelFetch(shadowcolor1, sampleVoxelUV, 0).x);
 
-        s.rgb /= PI;
+        sampleVoxel.rgb /= PI;
 
-        int sid = int(0.5 + 255.0 * s.a);
+        int sampleVoxelID = int(0.5 + 255.0 * sampleVoxel.a);
 
-        bool noncubic = (sid >= 4 && sid <= 66)||(sid >= 249 && sid <= 252);
-        bool translucent = (sid == 201);
+        bool nonCubic = (sampleVoxelID >= 4 && sampleVoxelID <= 66)||(sampleVoxelID >= 249 && sampleVoxelID <= 252);
+        bool translucent = (sampleVoxelID == 201);
 
-        vec3 sc = (texelFetch(colortex2, spuv, 0).rgb);
+        vec3 previousSampleVoxel = (texelFetch(colortex2, previousSampleVoxelUV, 0).rgb);
 
-        ///if(spuv.x < 0 || spuv.x >= ceil(shadowMapResolution / 2.) || spuv.y < 0 || spuv.y >= shadowMapResolution) continue;
+        vec3 sunContribution = sunVisibility * (length(sampleVoxel.rgb) <= 0.0 ? vec3(0.0) : sampleVoxel.rgb) * sun
+                             * float(max0(dot(normalize(-offset[i]), sunVector))) * sunTransmittance;
+        vec3 skyContribution = float(upVis) * (length(sampleVoxel.rgb) <= 0.0 ? vec3(1.0) : sampleVoxel.rgb) * sky;
 
-        samples += pow(visibility  * (length(s.rgb) <= 0.0 ? vec3(0.0) : s.rgb) * sun* float(max0(dot(normalize(-offset[i]), sunVector))) * sunTransmittance+ float(upVis) * (length(s.rgb) <= 0.0 ? vec3(1.0) : s.rgb) * sky + sc  * mix(vec3(1.0), s.rgb, float(translucent)) * float(!hitNoncubic(sid, -offset[i])), vec3(2.2));
+        vec3 visibility = mix(vec3(1.0), sampleVoxel.rgb, float(translucent)) * float(!hitNoncubic(sampleVoxelID, -offset[i]));
+        vec3 sampleVoxelContribution = previousSampleVoxel * visibility;
+
+        samples += pow(sunContribution + skyContribution + sampleVoxelContribution, vec3(2.2));
     }
-
-    floodFillData.rgb =  (pow(samples, vec3(1.0/2.2)) / 6.0 / falloff);
-       
+    floodFillData.rgb =  (pow(samples, vec3(1.0/2.2)) / 6.0) * falloff;
 
 }
